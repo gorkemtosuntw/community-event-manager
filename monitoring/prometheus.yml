@@ -1,0 +1,59 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          # Alertmanager configuration
+
+rule_files:
+  # Alert rules
+
+scrape_configs:
+  - job_name: 'event-service'
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        regex: event-service
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_container_port_number]
+        regex: "5000"
+        action: keep
+    
+  - job_name: 'user-service'
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        regex: user-service
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_container_port_number]
+        regex: "3000"
+        action: keep
+    
+  - job_name: 'notification-service'
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        regex: notification-service
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_container_port_number]
+        regex: "8080"
+        action: keep
+    
+  - job_name: 'kubernetes-nodes'
+    kubernetes_sd_configs:
+      - role: node
+    relabel_configs:
+      - action: labelmap
+        regex: __meta_kubernetes_node_label_(.+)
+      - target_label: __address__
+        replacement: kubernetes.default.svc:443
+      - source_labels: [__meta_kubernetes_node_name]
+        regex: (.+)
+        target_label: __metrics_path__
+        replacement: /api/v1/nodes/${1}/proxy/metrics

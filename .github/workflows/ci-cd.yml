@@ -1,0 +1,131 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+  DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        service: [event-service, user-service, notification-service]
+    
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Set up Python
+      if: matrix.service == 'event-service'
+      uses: actions/setup-python@v2
+      with:
+        python-version: 3.9
+    
+    - name: Set up Node.js
+      if: matrix.service == 'user-service'
+      uses: actions/setup-node@v2
+      with:
+        node-version: 16
+    
+    - name: Set up Go
+      if: matrix.service == 'notification-service'
+      uses: actions/setup-go@v2
+      with:
+        go-version: 1.17
+    
+    - name: Install dependencies
+      working-directory: services/${{ matrix.service }}
+      run: |
+        if [ "${{ matrix.service }}" == "event-service" ]; then
+          pip install -r requirements.txt
+        elif [ "${{ matrix.service }}" == "user-service" ]; then
+          npm install
+        elif [ "${{ matrix.service }}" == "notification-service" ]; then
+          go mod download
+        fi
+    
+    - name: Run tests
+      working-directory: services/${{ matrix.service }}
+      run: |
+        if [ "${{ matrix.service }}" == "event-service" ]; then
+          python -m unittest discover tests
+        elif [ "${{ matrix.service }}" == "user-service" ]; then
+          npm test
+        elif [ "${{ matrix.service }}" == "notification-service" ]; then
+          go test ./...
+        fi
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        service: [event-service, user-service, notification-service]
+    
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Login to Docker Hub
+      uses: docker/login-action@v1
+      with:
+        username: ${{ env.DOCKER_USERNAME }}
+        password: ${{ env.DOCKER_PASSWORD }}
+    
+    - name: Build and push Docker image
+      working-directory: services/${{ matrix.service }}
+      run: |
+        docker build -t ${{ env.DOCKER_USERNAME }}/${{ matrix.service }}:${{ github.sha }} .
+        docker push ${{ env.DOCKER_USERNAME }}/${{ matrix.service }}:${{ github.sha }}
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Set up Kubernetes
+      uses: azure/setup-kubectl@v1
+    
+    - name: Configure Kubernetes cluster
+      env:
+        KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+      run: |
+        mkdir -p $HOME/.kube
+        echo "$KUBE_CONFIG" > $HOME/.kube/config
+    
+    - name: Deploy to Kubernetes
+      run: |
+        kubectl apply -f infrastructure/k8s/event-service-deployment.yaml
+        kubectl apply -f infrastructure/k8s/user-service-deployment.yaml
+        kubectl apply -f infrastructure/k8s/notification-service-deployment.yaml
+        
+        kubectl set image deployment/event-service event-service=${{ env.DOCKER_USERNAME }}/event-service:${{ github.sha }}
+        kubectl set image deployment/user-service user-service=${{ env.DOCKER_USERNAME }}/user-service:${{ github.sha }}
+        kubectl set image deployment/notification-service notification-service=${{ env.DOCKER_USERNAME }}/notification-service:${{ github.sha }}
+
+  monitoring:
+    needs: deploy
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Setup Prometheus
+      run: |
+        helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+        helm repo update
+        helm install prometheus prometheus-community/prometheus
+    
+    - name: Setup Grafana
+      run: |
+        helm repo add grafana https://grafana.github.io/helm-charts
+        helm repo update
+        helm install grafana grafana/grafana
