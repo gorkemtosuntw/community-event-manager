@@ -19,15 +19,17 @@ def create_event():
     event_id = str(uuid.uuid4())
     
     # Validate event data
-    if not event_data or 'name' not in event_data or 'date' not in event_data:
-        return jsonify({"error": "Invalid event data"}), 400
+    required_fields = ['title', 'date']
+    if not event_data or not all(field in event_data for field in required_fields):
+        return jsonify({"error": "Missing required fields"}), 400
     
     # Create event
     event = {
         'id': event_id,
-        'name': event_data['name'],
+        'title': event_data['title'],
         'description': event_data.get('description', ''),
         'date': event_data['date'],
+        'location': event_data.get('location', ''),
         'created_at': datetime.utcnow().isoformat()
     }
     
@@ -50,5 +52,5 @@ if __name__ == '__main__':
     try:
         app.run(host='0.0.0.0', port=5000)
     except Exception as e:
-        print(f"Error starting the application: {str(e)}")
-        raise
+        print(f"Error starting the server: {e}")
+        exit(1)
