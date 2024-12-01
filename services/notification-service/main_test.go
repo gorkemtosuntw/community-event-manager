@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -24,10 +25,12 @@ func TestHealthCheck(t *testing.T) {
 			status, http.StatusOK)
 	}
 
+	// Trim any whitespace and newlines
+	got := strings.TrimSpace(rr.Body.String())
 	expected := `{"status":"healthy"}`
-	if rr.Body.String() != expected {
-		t.Errorf("handler returned unexpected body: got %v want %v",
-			rr.Body.String(), expected)
+	if got != expected {
+		t.Errorf("handler returned unexpected body: got %q want %q",
+			got, expected)
 	}
 }
 
@@ -59,13 +62,19 @@ func TestCreateNotification(t *testing.T) {
 			status, http.StatusCreated)
 	}
 
-	var response map[string]interface{}
+	var response Notification
 	err = json.NewDecoder(rr.Body).Decode(&response)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, exists := response["id"]; !exists {
+	if response.ID == "" {
 		t.Error("response should contain an id")
+	}
+	if response.UserID != notification.UserID {
+		t.Errorf("expected UserID %v, got %v", notification.UserID, response.UserID)
+	}
+	if response.Message != notification.Message {
+		t.Errorf("expected Message %v, got %v", notification.Message, response.Message)
 	}
 }
