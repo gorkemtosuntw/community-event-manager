@@ -25,19 +25,19 @@ jobs:
       if: matrix.service == 'event-service'
       uses: actions/setup-python@v2
       with:
-        python-version: 3.9
+        python-version: '3.9'
     
     - name: Set up Node.js
       if: matrix.service == 'user-service'
       uses: actions/setup-node@v2
       with:
-        node-version: 16
+        node-version: '16'
     
     - name: Set up Go
       if: matrix.service == 'notification-service'
       uses: actions/setup-go@v2
       with:
-        go-version: 1.17
+        go-version: '1.20'
     
     - name: Install dependencies
       working-directory: services/${{ matrix.service }}
@@ -54,16 +54,17 @@ jobs:
       working-directory: services/${{ matrix.service }}
       run: |
         if [ "${{ matrix.service }}" == "event-service" ]; then
-          python -m unittest discover tests
+          pytest test_app.py -v
         elif [ "${{ matrix.service }}" == "user-service" ]; then
           npm test
         elif [ "${{ matrix.service }}" == "notification-service" ]; then
-          go test ./...
+          go test -v ./...
         fi
 
   build-and-push:
     needs: test
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     
     strategy:
       matrix:
@@ -72,6 +73,9 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v1
+    
     - name: Login to Docker Hub
       uses: docker/login-action@v1
       with:
@@ -79,53 +83,37 @@ jobs:
         password: ${{ env.DOCKER_PASSWORD }}
     
     - name: Build and push Docker image
-      working-directory: services/${{ matrix.service }}
-      run: |
-        docker build -t ${{ env.DOCKER_USERNAME }}/${{ matrix.service }}:${{ github.sha }} .
-        docker push ${{ env.DOCKER_USERNAME }}/${{ matrix.service }}:${{ github.sha }}
+      uses: docker/build-push-action@v2
+      with:
+        context: services/${{ matrix.service }}
+        push: true
+        tags: |
+          ${{ env.DOCKER_USERNAME }}/${{ matrix.service }}:latest
+          ${{ env.DOCKER_USERNAME }}/${{ matrix.service }}:${{ github.sha }}
+        cache-from: type=registry,ref=${{ env.DOCKER_USERNAME }}/${{ matrix.service }}:latest
+        cache-to: type=inline
 
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     
     steps:
     - uses: actions/checkout@v2
     
-    - name: Set up Kubernetes
+    - name: Set up kubectl
       uses: azure/setup-kubectl@v1
     
-    - name: Configure Kubernetes cluster
-      env:
-        KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+    - name: Configure kubectl
       run: |
-        mkdir -p $HOME/.kube
-        echo "$KUBE_CONFIG" > $HOME/.kube/config
+        echo "${{ secrets.KUBE_CONFIG }}" > kubeconfig.yaml
+        export KUBECONFIG=kubeconfig.yaml
     
-    - name: Deploy to Kubernetes
+    - name: Update Kubernetes deployments
       run: |
-        kubectl apply -f infrastructure/k8s/event-service-deployment.yaml
-        kubectl apply -f infrastructure/k8s/user-service-deployment.yaml
-        kubectl apply -f infrastructure/k8s/notification-service-deployment.yaml
-        
-        kubectl set image deployment/event-service event-service=${{ env.DOCKER_USERNAME }}/event-service:${{ github.sha }}
-        kubectl set image deployment/user-service user-service=${{ env.DOCKER_USERNAME }}/user-service:${{ github.sha }}
-        kubectl set image deployment/notification-service notification-service=${{ env.DOCKER_USERNAME }}/notification-service:${{ github.sha }}
-
-  monitoring:
-    needs: deploy
-    runs-on: ubuntu-latest
-    
-    steps:
-    - uses: actions/checkout@v2
-    
-    - name: Setup Prometheus
-      run: |
-        helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-        helm repo update
-        helm install prometheus prometheus-community/prometheus
-    
-    - name: Setup Grafana
-      run: |
-        helm repo add grafana https://grafana.github.io/helm-charts
-        helm repo update
-        helm install grafana grafana/grafana
+        for service in event-service user-service notification-service; do
+          # Update image in deployment
+          kubectl set image deployment/$service $service=${{ env.DOCKER_USERNAME }}/$service:${{ github.sha }}
+          # Wait for rollout to complete
+          kubectl rollout status deployment/$service
+        done
